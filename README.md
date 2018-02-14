@@ -4,7 +4,7 @@
 A fully functioning OCP cluster
 
 ## As an admin of the OCP cluster, label a node to host Ceph:
-oc label node <hostname> "controller"="true"
+oc label node some-host "controller"="true"
 
 ## Deploy Ceph
 oc create -f ceph-demo.yml
