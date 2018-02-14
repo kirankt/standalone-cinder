@@ -2,12 +2,12 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: ceph-mon
+  name: ceph-demo
   namespace: openstack
   annotations:
     service.alpha.kubernetes.io/tolerate-unready-endpoints: "true"
   labels:
-    app: ceph
+    app: ceph-demo
     daemon: mon
 spec:
   ports:
@@ -15,7 +15,7 @@ spec:
     protocol: TCP
     targetPort: 6789
   selector:
-    app: ceph
+    app: ceph-demo
     daemon: mon
   clusterIP: None
 ---
@@ -28,7 +28,7 @@ spec:
   selector:
     matchLabels:
       app: ceph-demo
-    serviceName: "ceph"
+    serviceName: ceph-demo
   template:
     metadata:
       labels:

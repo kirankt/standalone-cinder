@@ -1,3 +1,21 @@
+# All-in-one Demo Ceph Deployment
+
+Prereqs
+A fully functioning OCP cluster
+
+As an admin of the OCP cluster, label a node to host Ceph:
+
+oc label node <hostname> "controller"="true"
+
+oc create -f ceph-demo.yml
+
+Teardown
+
+On the host where ceph created directories:
+rm -rf /etc/ceph /var/lib/ceph
+
+oc delete deployment ceph-demo
+
 # standalone-cinder
 
 Caveats
