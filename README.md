@@ -13,6 +13,7 @@ oc create -f ceph-demo.yml
 oc delete deployment ceph-demo
 
 On the host (the host that was labeled above) where ceph created directories:
+
 rm -rf /etc/ceph /var/lib/ceph
 
 # Standalone Cinder
@@ -26,6 +27,7 @@ OCP 3.6 and newer
 
 ## Create two service accounts:
 oc create sa openstack
+
 oc create sa openstack-priv
 
 ## Create a project called 'openstack'. All the pods reside here.
@@ -33,6 +35,7 @@ oc new-project openstack
 
 ## As cluster admin, add scc to the service accounts:
 oadm policy add-scc-to-user anyuid -n openstack -z openstack
+
 oadm policy add-scc-to-user privileged -n openstack -z openstack-priv
 
 ## Create Cinder installation
