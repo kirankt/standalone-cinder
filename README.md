@@ -1,46 +1,42 @@
-# All-in-one Demo Ceph Deployment
+# All-in-one Ceph Deployment
 
-Prereqs
+## Prereqs
 A fully functioning OCP cluster
 
-As an admin of the OCP cluster, label a node to host Ceph:
-
+## As an admin of the OCP cluster, label a node to host Ceph:
 oc label node <hostname> "controller"="true"
 
+## Deploy Ceph
 oc create -f ceph-demo.yml
 
-Teardown
-
-On the host where ceph created directories:
-rm -rf /etc/ceph /var/lib/ceph
-
+## Teardown
 oc delete deployment ceph-demo
 
-# standalone-cinder
+On the host (the host that was labeled above) where ceph created directories:
+rm -rf /etc/ceph /var/lib/ceph
 
-Caveats
-
+# Standalone Cinder
+## Caveats
 1. MariaDB doesn't use persistent storage
 2. Cinder auth strategy is 'noauth'
 
-Prerequisites
+## Prerequisites
 A fully working OpenShift/Kubernetes cluster. This template has been tested on
 OCP 3.6 and newer
 
-Create two service accounts:
-
+## Create two service accounts:
 oc create sa openstack
 oc create sa openstack-priv
 
-Create a project called 'openstack'. All the pods reside here.
+## Create a project called 'openstack'. All the pods reside here.
 oc new-project openstack
 
-As cluster admin, add scc to the service accounts:
+## As cluster admin, add scc to the service accounts:
 oadm policy add-scc-to-user anyuid -n openstack -z openstack
 oadm policy add-scc-to-user privileged -n openstack -z openstack-priv
 
-create cinder installatioon
+## Create Cinder installation
 oc create -f cinder-xtremio.yml
 
-
-Ceph Backend
+# Cinder with Ceph Backend
+TODO
