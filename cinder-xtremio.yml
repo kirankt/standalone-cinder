@@ -1,0 +1,795 @@
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: standalone-cinder-secrets
+data:
+  cinder-password: Y2luZGVycGFzc3dvcmQ=
+  db-root-password: d2Vha3Bhc3N3b3Jk
+  rabbitmq-password: cmFiYml0bXFwYXNzd29yZA==
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    app: rabbitmq
+  name: rabbitmq
+  namespace: openstack
+data:
+  config.json: |
+    {
+        "command": "/usr/sbin/rabbitmq-server",
+        "config_files": [
+            {
+                "source": "/var/lib/kolla/config_files/rabbitmq-env.conf",
+                "dest": "/etc/rabbitmq/rabbitmq-env.conf",
+                "owner": "rabbitmq",
+                "perm": "0600"
+            },
+            {
+                "source": "/var/lib/kolla/config_files/rabbitmq.config",
+                "dest": "/etc/rabbitmq/rabbitmq.config",
+                "owner": "rabbitmq",
+                "perm": "0600"
+            }
+        ],
+        "permissions": [
+            {
+                "path": "/var/lib/rabbitmq",
+                "owner": "rabbitmq:rabbitmq",
+                "recurse": true
+            },
+            {
+                "path": "/var/log/kolla/rabbitmq",
+                "owner": "rabbitmq:rabbitmq",
+                "recurse": true
+            }
+        ]
+    }
+  rabbitmq-env.conf: |
+    NODE_IP_ADDRESS=0.0.0.0
+    NODE_PORT=5672
+    RABBITMQ_SERVER_ERL_ARGS="+K true +P 1048576 -kernel inet_default_connect_options [{nodelay,true},{raw,6,18,<<5000:64/native>>}] -kernel inet_default_listen_options [{raw,6,18,<<5000:64/native>>}]"
+  rabbitmq.config: |
+    [
+      {rabbit, [
+        {tcp_listen_options, [binary, {packet, raw}, {reuseaddr, true}, {backlog, 128}, {nodelay, true}, {exit_on_close, false}, {keepalive, true}]},
+
+        {loopback_users, []},
+
+        {cluster_partition_handling, pause_minority},
+
+        {queue_master_locator, <<"min-masters">>},
+
+        {default_user, <<"guest">>},
+        {default_pass, <<"rabbitmqpassword">>}
+      ]},
+      {kernel, [
+        {inet_dist_listen_min, 25672},
+        {inet_dist_listen_max, 25672}    ]},
+      {rabbitmq_management, [
+        {listener, [
+          {port, 15672},
+          {ip, "0.0.0.0"}
+        ]}
+      ]}
+    ].
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+  namespace: openstack
+spec:
+  ports:
+  - name: epmd
+    port: 4369
+    protocol: TCP
+    targetPort: 4369
+  - name: amqp
+    port: 5672
+    protocol: TCP
+    targetPort: 5672
+  - name: comm
+    port: 25672
+    protocol: TCP
+    targetPort: 25672
+  selector:
+    app: rabbitmq
+  sessionAffinity: None
+  type: ClusterIP
+status:
+  loadBalancer: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq-mgmt
+  namespace: openstack
+spec:
+  ports:
+  - name: rabbitmq-mgmt
+    port: 15672
+    protocol: TCP
+    targetPort: 15672
+  selector:
+    app: rabbitmq
+  sessionAffinity: None
+  type: ClusterIP
+status:
+  loadBalancer: {}
+---
+apiVersion: apps/v1beta1
+kind: StatefulSet
+metadata:
+  name: rabbitmq
+  namespace: openstack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rabbitmq
+  serviceName: rabbitmq
+  template:
+    metadata:
+      labels:
+        app: rabbitmq
+    spec:
+      containers:
+      - env:
+        - name: TZ
+          value: UTC
+        - name: KOLLA_CONFIG_STRATEGY
+          value: COPY_ALWAYS
+        - name: KOLLA_KUBERNETES
+        image: tripleoupstream/centos-binary-rabbitmq:latest
+        imagePullPolicy: Always
+        name: rabbitmq
+        ports:
+        - containerPort: 5672
+          name: rabbitmq
+          protocol: TCP
+        - containerPort: 15672
+          name: rabbitmq-mgmt
+          protocol: TCP
+        volumeMounts:
+        - mountPath: /var/lib/kolla/config_files/
+          name: kolla-config
+      restartPolicy: Always
+      serviceAccount: openstack
+      serviceAccountName: openstack
+      volumes:
+      - configMap:
+          name: rabbitmq
+        name: kolla-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mariadb
+spec:
+  ports:
+  - port: 3306
+  selector:
+    app: mariadb
+  clusterIP: None
+---
+apiVersion: apps/v1beta1
+kind: StatefulSet
+metadata:
+  name: mariadb
+  namespace: openstack
+spec:
+  replicas: 1
+  serviceName: mariadb
+  selector:
+    matchLabels:
+      app: mariadb
+  template:
+    metadata:
+      labels:
+        app: mariadb
+    spec:
+      nodeSelector:
+        mariadb: "true"
+      containers:
+      - image: mariadb
+        name: mariadb
+        securityContext:
+          privileged: true
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: standalone-cinder-secrets
+              key: db-root-password
+        ports:
+        - containerPort: 3306
+          name: mariadb
+        volumeMounts:
+        - name: mariadb-persistent-storage
+          mountPath: /var/lib/mysql
+      restartPolicy: Always
+      serviceAccount: openstack-priv
+      serviceAccountName: openstack-priv
+      volumes:
+      - name: mariadb-persistent-storage
+        hostPath:
+          path: /var/lib/mysql
+          type: Directory
+
+# Cinder
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cinder
+spec:
+  ports:
+  - port: 8776
+  selector:
+    app: cinder
+  clusterIP: None
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    app: cinder
+  name: cinder-api
+  namespace: openstack
+data:
+  cinder.conf: |
+    [DEFAULT]
+    storage_availability_zone = nova
+    enable_v3_api = True
+    dellemc_xtremio_iscsi_backend = False
+    glance_api_servers = none
+    cinder_iscsi_address = iscsid
+    cinder_enable_rbd_backend = True
+    cinder_iscsi_helper = lioadm
+    enabled_backends = xtremio
+    authentication_type = cephx
+    cinder_enable_netapp_backend = False
+    glance_api_version = 2
+    log_dir = /var/log/cinder
+    osapi_volume_listen = 0.0.0.0
+    ceph_cluster_fsid = 1611b996-d2d7-11e6-b1c2-5254004237d4
+    rpc_backend = rabbit
+    cinder_lvm_loop_device_size = 10280
+    ceph_mon_host = 10.10.10.10
+    cinder_rbd_pool_name = volumes
+    nova_catalog_admin_info = compute:nova:adminURL
+    cinder_enable_iscsi_backend = False
+    scheduler_driver = cinder.scheduler.filter_scheduler.FilterScheduler
+    nova_catalog_info = compute:nova:internalURL
+    api_paste_config = /etc/cinder/api-paste.ini
+    transport_url = rabbit://guest:rabbitmqpassword@rabbitmq:5672/?ssl=0
+    cinder_enable_nfs_backend = False
+    cinder_rbd_user_name = openstack
+    public_bind_host = 0.0.0.0
+    control_exchange = openstack
+    auth_strategy = noauth
+    default_availability_zone = nova
+    osapi_volume_workers = 2
+
+    [oslo_messaging_rabbit]
+    rabbit_userid = guest
+    rabbit_port = 5672
+    heartbeat_timeout_threshold = 60
+    rabbit_password = rabbitmqpassword
+    ssl = False
+    rabbit_use_ssl = False
+    rabbit_heartbeat_timeout_threshold = 60
+
+    [oslo_middleware]
+    enable_proxy_headers_parsing = True
+
+    [oslo_messaging_notifications]
+    transport_url = rabbit://guest:rabbitmqpassword@rabbitmq:5672/?ssl=0
+    driver = messagingv2
+
+    [database]
+    db_max_retries = -1
+    host = mariadb
+    max_retries = -1
+    connection = mysql+pymysql://root:weakpassword@mariadb:3306/cinder
+    user = cinder
+    password = cinderpassword
+    dbname = cinder
+
+    [oslo_concurrency]
+    lock_path = /var/lib/cinder/tmp
+
+    [oslo_policy]
+    policy_file = /etc/cinder/policy.json
+
+    [xtremio]
+    max_over_subscription_ratio = 40.0
+    use_multipath_for_image_xfer=true
+    volume_backend_name=xtremio
+    volume_driver=cinder.volume.drivers.emc.xtremio.XtremIOISCSIDriver
+    san_ip=10.35.146.7
+    xtremio_cluster_name=RHEL-QE
+    san_login=cinder
+    san_password=qum5net
+    image_volume_cache_enabled = false
+  cinder-wsgi.conf: |
+    Listen 0.0.0.0:8776
+
+    TraceEnable off
+
+    <VirtualHost *:8776>
+        WSGIDaemonProcess cinder-api processes=5 threads=1 user=cinder group=cinder display-name=%{GROUP} python-path=/usr/lib/python2.7/site-packages
+        WSGIProcessGroup cinder-api
+        WSGIScriptAlias / /var/www/cgi-bin/cinder/cinder-wsgi
+        WSGIApplicationGroup %{GLOBAL}
+        WSGIPassAuthorization On
+        <IfVersion >= 2.4>
+          ErrorLogFormat "%{cu}t %M"
+        </IfVersion>
+        ErrorLog /var/log/kolla/cinder/cinder-api.log
+        LogFormat "%{X-Forwarded-For}i %l %u %t \"%r\" %>s %b %D \"%{Referer}i\" \"%{User-Agent}i\"" logformat
+        CustomLog /var/log/kolla/cinder/cinder-api-access.log logformat
+    </VirtualHost>
+  config.json: |
+    {
+        "command": "httpd -DFOREGROUND",
+        "config_files": [
+            {
+                "source": "/var/lib/kolla/config_files/cinder-wsgi.conf",
+                "dest": "/etc/httpd/conf.d/cinder-wsgi.conf",
+                "owner": "cinder",
+                "perm": "0600"
+            },
+            {
+                "source": "/var/lib/kolla/config_files/cinder.conf",
+                "dest": "/etc/cinder/cinder.conf",
+                "owner": "cinder",
+                "perm": "0600"
+            }
+        ],
+        "permissions": [
+            {
+                "path": "/var/lib/cinder",
+                "owner": "cinder:cinder",
+                "recurse": true
+            },
+            {
+                "path": "/var/log/kolla/cinder",
+                "owner": "cinder:cinder",
+                "recurse": true
+            }
+        ]
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    app: cinder
+  name: cinder-scheduler
+  namespace: openstack
+data:
+  cinder.conf: |
+    [DEFAULT]
+    storage_availability_zone = nova
+    enable_v3_api = True
+    dellemc_xtremio_iscsi_backend = False
+    glance_api_servers = none
+    cinder_iscsi_address = iscsid
+    cinder_enable_rbd_backend = True
+    cinder_iscsi_helper = lioadm
+    enabled_backends = xtremio
+    authentication_type = cephx
+    cinder_enable_netapp_backend = False
+    glance_api_version = 2
+    log_dir = /var/log/cinder
+    osapi_volume_listen = 0.0.0.0
+    ceph_cluster_fsid = 1611b996-d2d7-11e6-b1c2-5254004237d4
+    rpc_backend = rabbit
+    cinder_lvm_loop_device_size = 10280
+    ceph_mon_host = 10.10.10.10
+    cinder_rbd_pool_name = volumes
+    nova_catalog_admin_info = compute:nova:adminURL
+    cinder_enable_iscsi_backend = False
+    scheduler_driver = cinder.scheduler.filter_scheduler.FilterScheduler
+    nova_catalog_info = compute:nova:internalURL
+    api_paste_config = /etc/cinder/api-paste.ini
+    transport_url = rabbit://guest:rabbitmqpassword@rabbitmq:5672/?ssl=0
+    cinder_enable_nfs_backend = False
+    cinder_rbd_user_name = openstack
+    public_bind_host = 0.0.0.0
+    control_exchange = openstack
+    auth_strategy = noauth
+    default_availability_zone = nova
+    osapi_volume_workers = 2
+
+    [oslo_messaging_rabbit]
+    rabbit_userid = guest
+    rabbit_port = 5672
+    heartbeat_timeout_threshold = 60
+    rabbit_password = rabbitmqpassword
+    ssl = False
+    rabbit_use_ssl = False
+    rabbit_heartbeat_timeout_threshold = 60
+
+    [oslo_middleware]
+    enable_proxy_headers_parsing = True
+
+    [oslo_messaging_notifications]
+    transport_url = rabbit://guest:rabbitmqpassword@rabbitmq:5672/?ssl=0
+    driver = messagingv2
+
+    [database]
+    db_max_retries = -1
+    host = mariadb
+    max_retries = -1
+    connection = mysql+pymysql://root:weakpassword@mariadb:3306/cinder
+    user = cinder
+    password = cinderpassword
+    dbname = cinder
+
+    [oslo_concurrency]
+    lock_path = /var/lib/cinder/tmp
+
+    [oslo_policy]
+    policy_file = /etc/cinder/policy.json
+
+    [xtremio]
+    max_over_subscription_ratio = 40.0
+    use_multipath_for_image_xfer=true
+    volume_backend_name=xtremio
+    volume_driver=cinder.volume.drivers.emc.xtremio.XtremIOISCSIDriver
+    san_ip=10.35.146.7
+    xtremio_cluster_name=RHEL-QE
+    san_login=cinder
+    san_password=qum5net
+    image_volume_cache_enabled = false
+  config.json: |
+    {
+        "command": "cinder-scheduler --config-file /var/lib/kolla/config_files/cinder.conf",
+        "config_files": [
+            {
+                "source": "/var/lib/kolla/config_files/cinder.conf",
+                "dest": "/etc/cinder/cinder.conf",
+                "owner": "cinder",
+                "perm": "0600"
+            }
+        ],
+        "permissions": [
+            {
+                "path": "/var/lib/cinder",
+                "owner": "cinder:cinder",
+                "recurse": true
+            },
+            {
+                "path": "/var/log/kolla/cinder",
+                "owner": "cinder:cinder",
+                "recurse": true
+            }
+        ]
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    app: cinder
+  name: cinder-volume
+  namespace: openstack
+data:
+  cinder.conf: |
+    [DEFAULT]
+    storage_availability_zone = nova
+    enable_v3_api = True
+    dellemc_xtremio_iscsi_backend = False
+    glance_api_servers = none
+    cinder_iscsi_address = iscsid
+    cinder_enable_rbd_backend = True
+    cinder_iscsi_helper = lioadm
+    enabled_backends = xtremio
+    authentication_type = cephx
+    cinder_enable_netapp_backend = False
+    glance_api_version = 2
+    log_dir = /var/log/cinder
+    osapi_volume_listen = 0.0.0.0
+    ceph_cluster_fsid = 1611b996-d2d7-11e6-b1c2-5254004237d4
+    rpc_backend = rabbit
+    cinder_lvm_loop_device_size = 10280
+    ceph_mon_host = 10.10.10.10
+    cinder_rbd_pool_name = volumes
+    nova_catalog_admin_info = compute:nova:adminURL
+    cinder_enable_iscsi_backend = False
+    scheduler_driver = cinder.scheduler.filter_scheduler.FilterScheduler
+    nova_catalog_info = compute:nova:internalURL
+    api_paste_config = /etc/cinder/api-paste.ini
+    transport_url = rabbit://guest:rabbitmqpassword@rabbitmq:5672/?ssl=0
+    cinder_enable_nfs_backend = False
+    cinder_rbd_user_name = openstack
+    public_bind_host = 0.0.0.0
+    control_exchange = openstack
+    auth_strategy = noauth
+    default_availability_zone = nova
+    osapi_volume_workers = 2
+
+    [oslo_messaging_rabbit]
+    rabbit_userid = guest
+    rabbit_port = 5672
+    heartbeat_timeout_threshold = 60
+    rabbit_password = rabbitmqpassword
+    ssl = False
+    rabbit_use_ssl = False
+    rabbit_heartbeat_timeout_threshold = 60
+
+    [oslo_middleware]
+    enable_proxy_headers_parsing = True
+
+    [oslo_messaging_notifications]
+    transport_url = rabbit://guest:rabbitmqpassword@rabbitmq:5672/?ssl=0
+    driver = messagingv2
+
+    [database]
+    db_max_retries = -1
+    host = mariadb
+    max_retries = -1
+    connection = mysql+pymysql://root:weakpassword@mariadb:3306/cinder
+    user = cinder
+    password = cinderpassword
+    dbname = cinder
+
+    [oslo_concurrency]
+    lock_path = /var/lib/cinder/tmp
+
+    [oslo_policy]
+    policy_file = /etc/cinder/policy.json
+
+    [xtremio]
+    max_over_subscription_ratio = 40.0
+    use_multipath_for_image_xfer=true
+    volume_backend_name=xtremio
+    volume_driver=cinder.volume.drivers.emc.xtremio.XtremIOISCSIDriver
+    san_ip=10.35.146.7
+    xtremio_cluster_name=RHEL-QE
+    san_login=cinder
+    san_password=qum5net
+    image_volume_cache_enabled = false
+  config.json: |
+    {
+        "command": "cinder-volume --config-file /etc/cinder/cinder.conf",
+        "config_files": [
+            {
+                "source": "/var/lib/kolla/config_files/cinder.conf",
+                "dest": "/etc/cinder/cinder.conf",
+                "owner": "cinder",
+                "perm": "0600"
+            }
+        ],
+        "permissions": [
+            {
+                "path": "/var/lib/cinder",
+                "owner": "cinder:cinder",
+                "recurse": true
+            },
+            {
+                "path": "/var/log/kolla/cinder",
+                "owner": "cinder:cinder",
+                "recurse": true
+            }
+        ]
+    }
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cinder-create-db
+  namespace: openstack
+spec:
+  template:
+    spec:
+      containers:
+      - name: cinder-create-db
+        image: tripleoupstream/centos-binary-kolla-toolbox:latest
+        imagePullPolicy: IfNotPresent
+        command: ["sh", "-c"]
+        args:
+          - ansible localhost -m mysql_db -a
+            "login_host=mariadb
+             login_port=3306
+             login_user=root
+             login_password=$DATABASE_PASSWORD
+             name=cinder"
+        env:
+        - name: DATABASE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: standalone-cinder-secrets
+              key: db-root-password
+        - name: TZ
+          ###value: UTC
+      serviceAccount: openstack
+      serviceAccountName: openstack
+      restartPolicy: OnFailure 
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cinder-db-sync
+  namespace: openstack
+spec:
+  template:
+    spec:
+      containers:
+      - name: cinder-db-sync
+        image: tripleoupstream/centos-binary-cinder-api:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: KOLLA_KUBERNETES
+        - name: KOLLA_BOOTSTRAP
+        - name: KOLLA_CONFIG_STRATEGY
+          value: COPY_ONCE
+        - name: TZ
+          value: UTC
+        volumeMounts:
+        - mountPath: /var/lib/kolla/config_files/
+          name: kolla-config
+      serviceAccount: openstack
+      serviceAccountName: openstack
+      restartPolicy: OnFailure
+      volumes:
+      - configMap:
+          name: cinder-scheduler
+        name: kolla-config
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cinder-create-user
+  namespace: openstack
+spec:
+  template:
+    spec:
+      containers:
+      - name: cinder-create-db
+        image: tripleoupstream/centos-binary-kolla-toolbox:latest
+        imagePullPolicy: IfNotPresent
+        command: ["sh", "-c"]
+        args:
+        - ansible localhost -m mysql_user -a "login_host=mariadb login_port=3306
+          login_user=root login_password=$DATABASE_PASSWORD name=cinder password=$CINDER_DATABASE_PASSWORD
+          host='%' priv='cinder.*:ALL' append_privs='yes'"
+        env:
+        - name: CINDER_DATABASE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: standalone-cinder-secrets
+              key: cinder-password
+        - name: DATABASE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: standalone-cinder-secrets
+              key: db-root-password
+        - name: TZ
+          value: UTC
+      serviceAccount: openstack
+      serviceAccountName: openstack
+      restartPolicy: OnFailure
+---
+apiVersion: apps/v1beta1
+kind: Deployment
+metadata:
+  name: cinder-api
+  namespace: openstack
+spec:
+  replicas: 1
+  serviceName: cinder
+  selector:
+    matchLabels:
+      app: cinder
+  template:
+    metadata:
+      labels:
+        app: cinder
+    spec:
+      serviceAccount: openstack
+      serviceAccountName: openstack
+      containers:
+      - image: tripleoupstream/centos-binary-cinder-api:latest
+        name: cinder-api
+        env:
+        - name: TZ
+          value: UTC
+        - name: KOLLA_CONFIG_STRATEGY
+          value: COPY_ALWAYS
+        - name: KOLLA_KUBERNETES
+          value: ""
+        ports:
+        - containerPort: 8776
+          name: cinder-api
+        volumeMounts:
+        - mountPath: /var/lib/kolla/config_files/
+          name: kolla-config
+      restartPolicy: Always
+      serviceAccount: openstack
+      serviceAccountName: openstack
+      volumes:
+      - configMap:
+          name: cinder-api
+        name: kolla-config
+---
+apiVersion: apps/v1beta1
+kind: Deployment
+metadata:
+  name: cinder-scheduler
+  namespace: openstack
+spec:
+  replicas: 1
+  serviceName: cinder
+  selector:
+    matchLabels:
+      app: cinder
+  template:
+    metadata:
+      labels:
+        app: cinder
+    spec:
+      serviceAccount: openstack
+      serviceAccountName: openstack
+      containers:
+      - image: tripleoupstream/centos-binary-cinder-scheduler:latest
+        name: cinder-api
+        env:
+        - name: TZ
+          value: UTC
+        - name: KOLLA_CONFIG_STRATEGY
+          value: COPY_ALWAYS
+        - name: KOLLA_KUBERNETES
+          value: ""
+        volumeMounts:
+        - mountPath: /var/lib/kolla/config_files/
+          name: kolla-config
+      restartPolicy: Always
+      serviceAccount: openstack
+      serviceAccountName: openstack
+      volumes:
+      - configMap:
+          name: cinder-scheduler
+        name: kolla-config
+---
+apiVersion: apps/v1beta1
+kind: Deployment
+metadata:
+  name: cinder-volume-xtremio
+  namespace: openstack
+spec:
+  replicas: 1
+  serviceName: cinder
+  selector:
+    matchLabels:
+      app: cinder
+  template:
+    metadata:
+      labels:
+        app: cinder
+    spec:
+      serviceAccount: openstack
+      serviceAccountName: openstack
+      containers:
+      - image: tripleoupstream/centos-binary-cinder-volume:latest
+        name: cinder-volume
+        env:
+        - name: TZ
+          value: UTC
+        - name: KOLLA_CONFIG_STRATEGY
+          value: COPY_ALWAYS
+        - name: KOLLA_KUBERNETES
+          value: ""
+        volumeMounts:
+        - mountPath: /var/lib/kolla/config_files/
+          name: kolla-config
+      volumes:
+        - configMap:
+            name: cinder-volume
+          name: kolla-config
