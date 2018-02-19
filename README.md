@@ -42,4 +42,14 @@ oadm policy add-scc-to-user privileged -n openstack -z openstack-priv
 oc create -f cinder-xtremio.yml
 
 # Cinder with Ceph Backend
-TODO
+Gather info of your Ceph cluster. Or deploy a dummy on your OCP cluster.
+
+Create a cinder client in the Ceph cluster. Fetch the fsid, ceph.client.cinder.keyring,
+ceph.conf and the fsid. We will create a secret out of these.
+
+oc create secret generic ceph-secrets --from-literal fsid='cdd4641e-f769-410b-b7c5-61ad19708145' --from-file=ceph.conf --from-file=ceph.client.cinder.keyring
+
+
+Deploy Cinder with Ceph backend.
+
+oc create -f cinder-ceph.yml
