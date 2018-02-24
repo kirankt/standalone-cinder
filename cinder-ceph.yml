@@ -1,4 +1,30 @@
 ---
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRoleBinding
+metadata:
+  name: cinder-privileged
+  namespace: kube-system
+roleRef:
+  kind: ClusterRole
+  name: cinder-privileged
+subjects:
+  - kind: ServiceAccount
+    name: cinder-privileged
+    namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRoleBinding
+metadata:
+  name: cinder-anyuid
+  namespace: kube-system
+roleRef:
+  kind: ClusterRole
+  name: cinder-anyuid
+subjects:
+  - kind: ServiceAccount
+    name: cinder-anyuid
+    namespace: kube-system
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -191,6 +217,8 @@ metadata:
 spec:
   template:
     spec:
+      nodeSelector:
+        mariadb: "true"
       containers:
       - env:
         - name: TZ
@@ -214,7 +242,7 @@ spec:
         - containerPort: 3306
           name: mariadb
         volumeMounts:
-        - name: mariadb-not-persistent-storage
+        - name: mariadb-persistent-storage
           mountPath: /var/lib/mysql
         - mountPath: /var/lib/kolla/config_files/
           name: kolla-config
@@ -222,7 +250,10 @@ spec:
       serviceAccount: cinder-privileged
       serviceAccountName: cinder-privileged
       volumes:
-      - name: mariadb-not-persistent-storage
+      - name: mariadb-persistent-storage
+        hostPath:              
+          path: /var/lib/mysql         
+          type: Directory
       - configMap:
           name: mariadb
         name: kolla-config
@@ -245,6 +276,8 @@ spec:
       labels:
         app: mariadb
     spec:
+      nodeSelector:
+        mariadb: "true"
       initContainers:        
         - name: dependencies
           image: "tripleoupstream/centos-binary-kubernetes-entrypoint"
@@ -275,7 +308,7 @@ spec:
         - containerPort: 3306
           name: mariadb
         volumeMounts:
-        - name: mariadb-not-persistent-storage
+        - name: mariadb-persistent-storage
           mountPath: /var/lib/mysql
         - mountPath: /var/lib/kolla/config_files/
           name: kolla-config
@@ -283,7 +316,10 @@ spec:
       serviceAccount: cinder-privileged
       serviceAccountName: cinder-privileged
       volumes:
-      - name: mariadb-not-persistent-storage
+      - name: mariadb-persistent-storage
+        hostPath:              
+          path: /var/lib/mysql         
+          type: Directory
       - configMap:
           name: mariadb
         name: kolla-config
