@@ -5,7 +5,7 @@ metadata:
   labels:
     app: rabbitmq
   name: rabbitmq
-  namespace: _NAMESPACE_
+  namespace: kube-system
 data:
   config.json: |
     {
@@ -70,7 +70,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: rabbitmq
-  namespace: _NAMESPACE_
+  namespace: kube-system
 spec:
   ports:
   - name: epmd
@@ -96,7 +96,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: rabbitmq-mgmt
-  namespace: _NAMESPACE_
+  namespace: kube-system
 spec:
   ports:
   - name: rabbitmq-mgmt
@@ -114,7 +114,7 @@ apiVersion: apps/v1beta1
 kind: StatefulSet
 metadata:
   name: rabbitmq
-  namespace: _NAMESPACE_
+  namespace: kube-system
 spec:
   replicas: 1
   selector:
@@ -147,8 +147,8 @@ spec:
         - mountPath: /var/lib/kolla/config_files/
           name: kolla-config
       restartPolicy: Always
-      serviceAccount: _ANYUID_SA_
-      serviceAccountName: openstack
+      serviceAccount: cinder-anyuid
+      serviceAccountName: cinder-anyuid
       volumes:
       - configMap:
           name: rabbitmq
@@ -160,7 +160,7 @@ metadata:
   labels:
     app: mariadb
   name: mariadb
-  namespace: _NAMESPACE_
+  namespace: kube-system
 data:
   config.json: |
     {
@@ -219,8 +219,8 @@ spec:
         - mountPath: /var/lib/kolla/config_files/
           name: kolla-config
       restartPolicy: OnFailure
-      serviceAccount: _PRIVILEGED_SA_
-      serviceAccountName: _PRIVILEGED_SA_
+      serviceAccount: cinder-privileged
+      serviceAccountName: cinder-privileged
       volumes:
       - name: mariadb-persistent-storage
         hostPath:
@@ -236,7 +236,7 @@ apiVersion: apps/v1beta1
 kind: StatefulSet
 metadata:
   name: mariadb
-  namespace: _NAMESPACE_
+  namespace: kube-system
 spec:
   replicas: 1
   serviceName: mariadb
@@ -258,7 +258,7 @@ spec:
             - name: "DEPENDENCY_JOBS"
               value: "mariadb-bootstrap"
             - name: NAMESPACE
-              value: "openstack"
+              value: "kube-system"
       containers:
       - env:
         - name: TZ
@@ -285,8 +285,8 @@ spec:
         - mountPath: /var/lib/kolla/config_files/
           name: kolla-config
       restartPolicy: Always
-      serviceAccount: _PRIVILEGED_SA_
-      serviceAccountName: _PRIVILEGED_SA_
+      serviceAccount: cinder-privileged
+      serviceAccountName: cinder-privileged
       volumes:
       - name: mariadb-persistent-storage
         hostPath:
@@ -315,7 +315,7 @@ metadata:
   labels:
     app: cinder
   name: cinder-api
-  namespace: _NAMESPACE_
+  namespace: kube-system
 data:
   cinder.conf: |
     [DEFAULT]
@@ -416,7 +416,7 @@ metadata:
   labels:
     app: cinder
   name: cinder-scheduler
-  namespace: _NAMESPACE_
+  namespace: kube-system
 data:
   cinder.conf: |
     [DEFAULT]
@@ -493,7 +493,7 @@ metadata:
   labels:
     app: cinder
   name: cinder-volume-ceph
-  namespace: _NAMESPACE_
+  namespace: kube-system
 data:
   cinder.conf: |
     [DEFAULT]
@@ -583,7 +583,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: cinder-create-db
-  namespace: _NAMESPACE_
+  namespace: kube-system
 spec:
   template:
     spec:
@@ -607,15 +607,15 @@ spec:
               key: db-root-password
         - name: TZ
           ###value: UTC
-      serviceAccount: _ANYUID_SA_
-      serviceAccountName: openstack
+      serviceAccount: cinder-anyuid
+      serviceAccountName: cinder-anyuid
       restartPolicy: OnFailure 
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: cinder-db-sync
-  namespace: _NAMESPACE_
+  namespace: kube-system
 spec:
   template:
     spec:
@@ -627,7 +627,7 @@ spec:
             - name: "DEPENDENCY_JOBS"
               value: "cinder-create-db"
             - name: NAMESPACE
-              value: "openstack"
+              value: "kube-system"
 
       containers:
       - name: cinder-db-sync
@@ -643,8 +643,8 @@ spec:
         volumeMounts:
         - mountPath: /var/lib/kolla/config_files/
           name: kolla-config
-      serviceAccount: _ANYUID_SA_
-      serviceAccountName: openstack
+      serviceAccount: cinder-anyuid
+      serviceAccountName: cinder-anyuid
       restartPolicy: OnFailure
       volumes:
       - configMap:
@@ -656,7 +656,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: cinder-create-user
-  namespace: _NAMESPACE_
+  namespace: kube-system
 spec:
   template:
     spec:
@@ -668,7 +668,7 @@ spec:
             - name: "DEPENDENCY_JOBS"
               value: "cinder-create-db"
             - name: NAMESPACE
-              value: "openstack"
+              value: "kube-system"
 
       containers:
       - name: cinder-create-db
@@ -692,15 +692,15 @@ spec:
               key: db-root-password
         - name: TZ
           value: UTC
-      serviceAccount: _ANYUID_SA_
-      serviceAccountName: openstack
+      serviceAccount: cinder-anyuid
+      serviceAccountName: cinder-anyuid
       restartPolicy: OnFailure
 ---
 apiVersion: apps/v1beta1
 kind: Deployment
 metadata:
   name: cinder-api
-  namespace: _NAMESPACE_
+  namespace: kube-system
 spec:
   replicas: 1
   serviceName: cinder
@@ -712,8 +712,8 @@ spec:
       labels:
         app: cinder
     spec:
-      serviceAccount: _ANYUID_SA_
-      serviceAccountName: openstack
+      serviceAccount: cinder-anyuid
+      serviceAccountName: cinder-anyuid
       initContainers:
       - name: updated-config
         image: tripleoupstream/centos-binary-kolla-toolbox
@@ -769,8 +769,8 @@ spec:
         - mountPath: /var/lib/kolla/config_files/
           name: final-config
       restartPolicy: Always
-      serviceAccount: _ANYUID_SA_
-      serviceAccountName: openstack
+      serviceAccount: cinder-anyuid
+      serviceAccountName: cinder-anyuid
       volumes:
       - configMap:
           name: cinder-api
@@ -782,7 +782,7 @@ apiVersion: apps/v1beta1
 kind: Deployment
 metadata:
   name: cinder-scheduler
-  namespace: _NAMESPACE_
+  namespace: kube-system
 spec:
   replicas: 1
   serviceName: cinder
@@ -794,8 +794,8 @@ spec:
       labels:
         app: cinder
     spec:
-      serviceAccount: _ANYUID_SA_
-      serviceAccountName: openstack
+      serviceAccount: cinder-anyuid
+      serviceAccountName: cinder-anyuid
       initContainers:
       - name: updated-config
         image: tripleoupstream/centos-binary-kolla-toolbox
@@ -848,8 +848,8 @@ spec:
         - name: final-config
           mountPath: /var/lib/kolla/config_files/
       restartPolicy: Always
-      serviceAccount: _ANYUID_SA_
-      serviceAccountName: openstack
+      serviceAccount: cinder-anyuid
+      serviceAccountName: cinder-anyuid
       volumes:
       - configMap:
           name: cinder-scheduler
@@ -861,7 +861,7 @@ apiVersion: apps/v1beta1
 kind: Deployment
 metadata:
   name: cinder-volume-ceph
-  namespace: _NAMESPACE_
+  namespace: kube-system
 spec:
   replicas: 1
   serviceName: cinder
@@ -873,8 +873,8 @@ spec:
       labels:
         app: cinder
     spec:
-      serviceAccount: _ANYUID_SA_
-      serviceAccountName: openstack
+      serviceAccount: cinder-anyuid
+      serviceAccountName: cinder-anyuid
       initContainers:
       - name: updated-config
         image: tripleoupstream/centos-binary-kolla-toolbox

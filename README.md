@@ -26,17 +26,17 @@ A fully working OpenShift/Kubernetes cluster. This template has been tested on
 OCP 3.6 and newer
 
 ## Create two service accounts:
-oc create sa openstack
+oc create sa cinder-anyuid
 
-oc create sa openstack-priv
+oc create sa cinder-privileged
 
 ## Create a project called 'openstack'. All the pods reside here.
 oc new-project openstack
 
 ## As cluster admin, add scc to the service accounts:
-oadm policy add-scc-to-user anyuid -n openstack -z openstack
+oadm policy add-scc-to-user anyuid -n openstack -z cinder-anyuid
 
-oadm policy add-scc-to-user privileged -n openstack -z openstack-priv
+oadm policy add-scc-to-user privileged -n openstack -z cinder-privileged
 
 ## Create Cinder installation
 oc create -f cinder-xtremio.yml
@@ -47,9 +47,12 @@ Gather info of your Ceph cluster. Or deploy a dummy on your OCP cluster.
 Create a cinder client in the Ceph cluster. Fetch the fsid, ceph.client.cinder.keyring,
 ceph.conf and the fsid. We will create a secret out of these.
 
+'''bash
 oc create secret generic ceph-secrets --from-literal fsid='cdd4641e-f769-410b-b7c5-61ad19708145' --from-file=ceph.conf --from-file=ceph.client.cinder.keyring
-
+'''
 
 Deploy Cinder with Ceph backend.
 
+'''bash
 oc create -f cinder-ceph.yml
+'''
