@@ -181,23 +181,6 @@ spec:
         name: kolla-config
 ---
 apiVersion: v1
-kind: ConfigMap
-metadata:
-  labels:
-    app: mariadb
-  name: mariadb
-  namespace: kube-system
-data:
-  config.json: |
-    {
-        "command": "/usr/bin/mysqld_safe",
-        "config_files": []
-    }
-  server-cnf: |
-    [mysqld]
-    pid-file=/var/lib/mysql/mariadb.pid
----
-apiVersion: v1
 kind: Service
 metadata:
   name: mariadb
@@ -209,57 +192,6 @@ spec:
     app: mariadb
   clusterIP: None
 ---
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: mariadb-bootstrap
-  namespace: kube-system
-spec:
-  template:
-    spec:
-      nodeSelector:
-        mariadb: "true"
-      containers:
-      - env:
-        - name: TZ
-          value: UTC
-        - name: KOLLA_CONFIG_STRATEGY
-          value: COPY_ALWAYS
-        - name: KOLLA_KUBERNETES
-        - name: KOLLA_BOOTSTRAP
-          value: ""
-        - name: DB_ROOT_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: cinder-secrets
-              key: db-root-password
-        image: tripleoupstream/centos-binary-mariadb:latest
-        imagePullPolicy: "IfNotPresent"
-        name: mariadb
-        securityContext:
-          privileged: true
-        ports:
-        - containerPort: 3306
-          name: mariadb
-        volumeMounts:
-        - name: mariadb-persistent-storage
-          mountPath: /var/lib/mysql
-        - mountPath: /var/lib/kolla/config_files/
-          name: kolla-config
-      restartPolicy: OnFailure
-      serviceAccount: cinder-privileged
-      serviceAccountName: cinder-privileged
-      volumes:
-      - name: mariadb-persistent-storage
-        hostPath:              
-          path: /var/lib/mysql         
-          type: Directory
-      - configMap:
-          name: mariadb
-        name: kolla-config
-
----
-# Will not start before  mariadb-bootstrap
 apiVersion: apps/v1beta1
 kind: StatefulSet
 metadata:
@@ -271,58 +203,31 @@ spec:
   selector:
     matchLabels:
       app: mariadb
+  strategy:
+    type: Recreate
   template:
     metadata:
       labels:
         app: mariadb
     spec:
-      nodeSelector:
-        mariadb: "true"
-      initContainers:        
-        - name: dependencies
-          image: "tripleoupstream/centos-binary-kubernetes-entrypoint"
-          imagePullPolicy: "IfNotPresent"
-          env:
-            - name: "DEPENDENCY_JOBS"
-              value: "mariadb-bootstrap"
-            - name: NAMESPACE
-              value: "kube-system"
       containers:
-      - env:
-        - name: TZ
-          value: UTC
-        - name: KOLLA_CONFIG_STRATEGY
-          value: COPY_ALWAYS
-        - name: KOLLA_KUBERNETES
-        - name: DB_ROOT_PASSWORD
+      - image: mariadb
+        name: mariadb
+        env:
+        - name: MYSQL_ROOT_PASSWORD
           valueFrom:
             secretKeyRef:
               name: cinder-secrets
               key: db-root-password
-        image: tripleoupstream/centos-binary-mariadb:latest
-        imagePullPolicy: "IfNotPresent"
-        name: mariadb
-        securityContext:
-          privileged: true
         ports:
         - containerPort: 3306
           name: mariadb
         volumeMounts:
         - name: mariadb-persistent-storage
           mountPath: /var/lib/mysql
-        - mountPath: /var/lib/kolla/config_files/
-          name: kolla-config
-      restartPolicy: Always
-      serviceAccount: cinder-privileged
-      serviceAccountName: cinder-privileged
       volumes:
       - name: mariadb-persistent-storage
-        hostPath:              
-          path: /var/lib/mysql         
-          type: Directory
-      - configMap:
-          name: mariadb
-        name: kolla-config
+
 
 # Cinder
 ---
