@@ -553,16 +553,6 @@ metadata:
 spec:
   template:
     spec:
-      initContainers:
-        - name: dependencies
-          image: "tripleoupstream/centos-binary-kubernetes-entrypoint"
-          imagePullPolicy: "IfNotPresent"
-          env:
-            - name: "DEPENDENCY_JOBS"
-              value: "cinder-create-db"
-            - name: NAMESPACE
-              value: "kube-system"
-
       containers:
       - name: cinder-db-sync
         image: tripleoupstream/centos-binary-cinder-api:latest
@@ -594,16 +584,6 @@ metadata:
 spec:
   template:
     spec:
-      initContainers:
-        - name: dependencies
-          image: "tripleoupstream/centos-binary-kubernetes-entrypoint"
-          imagePullPolicy: "IfNotPresent"
-          env:
-            - name: "DEPENDENCY_JOBS"
-              value: "cinder-create-db"
-            - name: NAMESPACE
-              value: "kube-system"
-
       containers:
       - name: cinder-create-db
         image: tripleoupstream/centos-binary-kolla-toolbox:latest
