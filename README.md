@@ -4,7 +4,7 @@
 A fully functioning OCP cluster
 
 ## As an admin of the OCP cluster, label a node to host Ceph:
-oc label node some-host "controller"="true"
+oc label node some-host "mariadb"="true"
 
 ## Deploy Ceph
 oc create -f ceph-demo.yml
@@ -18,7 +18,7 @@ rm -rf /etc/ceph /var/lib/ceph
 
 # Standalone Cinder
 ## Caveats
-1. MariaDB doesn't use persistent storage
+1. MariaDB uses hostpath on a labeled node for persistent storage.
 2. Cinder auth strategy is 'noauth'
 
 ## Prerequisites
@@ -48,7 +48,7 @@ Create a cinder client in the Ceph cluster. Fetch the fsid, ceph.client.cinder.k
 ceph.conf and the fsid. We will create a secret out of these.
 
 '''bash
-oc create secret generic ceph-secrets --from-literal fsid='cdd4641e-f769-410b-b7c5-61ad19708145' --from-file=ceph.conf --from-file=ceph.client.cinder.keyring
+oc create secret generic ceph-secrets --from-file=ceph.conf --from-file=ceph.client.cinder.keyring
 '''
 
 Deploy Cinder with Ceph backend.
