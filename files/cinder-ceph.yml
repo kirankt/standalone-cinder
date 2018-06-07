@@ -1,5 +1,48 @@
 ---
 apiVersion: v1
+kind: ServiceAccount
+metadata:
+    name: cinder-anyuid
+    namespace: openstack
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+    name: cinder-privileged
+    namespace: openstack
+
+# NOTE: Uncomment these two objects if deploying on kube-system
+# namespace. By default the service accounts will not have
+# access to jobs within kube-system namespace
+#
+#
+#apiVersion: rbac.authorization.k8s.io/v1beta1
+#kind: ClusterRoleBinding
+#metadata:
+  #name: cinder-privileged
+  #namespace: openstack
+#roleRef:
+  #kind: ClusterRole
+  #name: cinder-privileged
+#subjects:
+  #- kind: ServiceAccount
+    #name: cinder-privileged
+    #namespace: openstack
+#---
+#apiVersion: rbac.authorization.k8s.io/v1beta1
+#kind: ClusterRoleBinding
+#metadata:
+  #name: cinder-anyuid
+  #namespace: openstack
+#roleRef:
+  #kind: ClusterRole
+  #name: cinder-anyuid
+#subjects:
+  #- kind: ServiceAccount
+    #name: cinder-anyuid
+    #namespace: openstack
+---
+apiVersion: v1
 kind: ConfigMap
 metadata:
   labels:
@@ -155,26 +198,10 @@ spec:
         name: kolla-config
 ---
 apiVersion: v1
-kind: ConfigMap
-metadata:
-  labels:
-    app: mariadb
-  name: mariadb
-  namespace: openstack
-data:
-  config.json: |
-    {
-        "command": "/usr/bin/mysqld_safe",
-        "config_files": []
-    }
-  server-cnf: |
-    [mysqld]
-    pid-file=/var/lib/mysql/mariadb.pid
----
-apiVersion: v1
 kind: Service
 metadata:
   name: mariadb
+  namespace: openstack
 spec:
   ports:
   - port: 3306
@@ -182,56 +209,6 @@ spec:
     app: mariadb
   clusterIP: None
 ---
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: mariadb-bootstrap
-spec:
-  template:
-    spec:
-      nodeSelector:
-        mariadb: "true"
-      containers:
-      - env:
-        - name: TZ
-          value: UTC
-        - name: KOLLA_CONFIG_STRATEGY
-          value: COPY_ALWAYS
-        - name: KOLLA_KUBERNETES
-        - name: KOLLA_BOOTSTRAP
-          value: ""
-        - name: DB_ROOT_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: cinder-secrets
-              key: db-root-password
-        image: tripleoupstream/centos-binary-mariadb:latest
-        imagePullPolicy: "IfNotPresent"
-        name: mariadb
-        securityContext:
-          privileged: true
-        ports:
-        - containerPort: 3306
-          name: mariadb
-        volumeMounts:
-        - name: mariadb-persistent-storage
-          mountPath: /var/lib/mysql
-        - mountPath: /var/lib/kolla/config_files/
-          name: kolla-config
-      restartPolicy: OnFailure
-      serviceAccount: cinder-privileged
-      serviceAccountName: cinder-privileged
-      volumes:
-      - name: mariadb-persistent-storage
-        hostPath:
-          path: /var/lib/mysql
-          type: Directory
-      - configMap:
-          name: mariadb
-        name: kolla-config
-
----
-# Will not start before  mariadb-bootstrap
 apiVersion: apps/v1beta1
 kind: StatefulSet
 metadata:
@@ -239,62 +216,33 @@ metadata:
   namespace: openstack
 spec:
   replicas: 1
-  serviceName: mariadb
   selector:
     matchLabels:
       app: mariadb
+  serviceName: mariadb
   template:
     metadata:
       labels:
         app: mariadb
     spec:
-      nodeSelector:
-        mariadb: "true"
-      initContainers:        
-        - name: dependencies
-          image: "tripleoupstream/centos-binary-kubernetes-entrypoint"
-          imagePullPolicy: "IfNotPresent"
-          env:
-            - name: "DEPENDENCY_JOBS"
-              value: "mariadb-bootstrap"
-            - name: NAMESPACE
-              value: "openstack"
       containers:
-      - env:
-        - name: TZ
-          value: UTC
-        - name: KOLLA_CONFIG_STRATEGY
-          value: COPY_ALWAYS
-        - name: KOLLA_KUBERNETES
-        - name: DB_ROOT_PASSWORD
+      - image: mariadb
+        name: mariadb
+        env:
+        - name: MYSQL_ROOT_PASSWORD
           valueFrom:
             secretKeyRef:
               name: cinder-secrets
-              key: db-root-password
-        image: tripleoupstream/centos-binary-mariadb:latest
-        imagePullPolicy: "IfNotPresent"
-        name: mariadb
-        securityContext:
-          privileged: true
+              key: mariadb-root-password
         ports:
         - containerPort: 3306
           name: mariadb
         volumeMounts:
         - name: mariadb-persistent-storage
           mountPath: /var/lib/mysql
-        - mountPath: /var/lib/kolla/config_files/
-          name: kolla-config
-      restartPolicy: Always
-      serviceAccount: cinder-privileged
-      serviceAccountName: cinder-privileged
       volumes:
       - name: mariadb-persistent-storage
-        hostPath:
-          path: /var/lib/mysql
-          type: Directory
-      - configMap:
-          name: mariadb
-        name: kolla-config
+
 
 # Cinder
 ---
@@ -302,6 +250,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: cinder
+  namespace: openstack
 spec:
   ports:
   - port: 8776
@@ -604,7 +553,7 @@ spec:
           valueFrom:
             secretKeyRef:
               name: cinder-secrets
-              key: db-root-password
+              key: mariadb-root-password
         - name: TZ
           ###value: UTC
       serviceAccount: cinder-anyuid
@@ -619,16 +568,6 @@ metadata:
 spec:
   template:
     spec:
-      initContainers:
-        - name: dependencies
-          image: "tripleoupstream/centos-binary-kubernetes-entrypoint"
-          imagePullPolicy: "IfNotPresent"
-          env:
-            - name: "DEPENDENCY_JOBS"
-              value: "cinder-create-db"
-            - name: NAMESPACE
-              value: "openstack"
-
       containers:
       - name: cinder-db-sync
         image: tripleoupstream/centos-binary-cinder-api:latest
@@ -660,16 +599,6 @@ metadata:
 spec:
   template:
     spec:
-      initContainers:
-        - name: dependencies
-          image: "tripleoupstream/centos-binary-kubernetes-entrypoint"
-          imagePullPolicy: "IfNotPresent"
-          env:
-            - name: "DEPENDENCY_JOBS"
-              value: "cinder-create-db"
-            - name: NAMESPACE
-              value: "openstack"
-
       containers:
       - name: cinder-create-db
         image: tripleoupstream/centos-binary-kolla-toolbox:latest
@@ -689,7 +618,7 @@ spec:
           valueFrom:
             secretKeyRef:
               name: cinder-secrets
-              key: db-root-password
+              key: mariadb-root-password
         - name: TZ
           value: UTC
       serviceAccount: cinder-anyuid
@@ -703,7 +632,6 @@ metadata:
   namespace: openstack
 spec:
   replicas: 1
-  serviceName: cinder
   selector:
     matchLabels:
       app: cinder
@@ -733,7 +661,7 @@ spec:
           valueFrom:
             secretKeyRef:
               name: cinder-secrets
-              key: db-root-password
+              key: mariadb-root-password
         - name: CINDER_PASSWORD
           valueFrom:
             secretKeyRef:
@@ -785,7 +713,6 @@ metadata:
   namespace: openstack
 spec:
   replicas: 1
-  serviceName: cinder
   selector:
     matchLabels:
       app: cinder
@@ -815,7 +742,7 @@ spec:
           valueFrom:
             secretKeyRef:
               name: cinder-secrets
-              key: db-root-password
+              key: mariadb-root-password
         - name: CINDER_PASSWORD
           valueFrom:
             secretKeyRef:
@@ -864,7 +791,6 @@ metadata:
   namespace: openstack
 spec:
   replicas: 1
-  serviceName: cinder
   selector:
     matchLabels:
       app: cinder
@@ -895,7 +821,7 @@ spec:
           valueFrom:
             secretKeyRef:
               name: cinder-secrets
-              key: db-root-password
+              key: mariadb-root-password
         - name: CINDER_PASSWORD
           valueFrom:
             secretKeyRef:

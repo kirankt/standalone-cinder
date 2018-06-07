@@ -76,4 +76,3 @@ Refer to [ceph](./docs/ceph.md) document to create the cinder pool and user.
       playbook_debug: false
 
 ```
-

@@ -1,12 +1,46 @@
 ---
 apiVersion: v1
-kind: Secret
+kind: ServiceAccount
 metadata:
-  name: cinder-secrets
-data:
-  cinder-password: Y2luZGVycGFzc3dvcmQ=
-  db-root-password: d2Vha3Bhc3N3b3Jk
-  rabbitmq-password: cmFiYml0bXFwYXNzd29yZA==
+    name: cinder-anyuid
+    namespace: openstack
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+    name: cinder-privileged
+    namespace: openstack
+
+# NOTE: Uncomment these two objects if deploying on kube-system
+# namespace. By default the service accounts will not have
+# access to jobs within kube-system namespace
+#
+#
+#apiVersion: rbac.authorization.k8s.io/v1beta1
+#kind: ClusterRoleBinding
+#metadata:
+  #name: cinder-privileged
+  #namespace: openstack
+#roleRef:
+  #kind: ClusterRole
+  #name: cinder-privileged
+#subjects:
+  #- kind: ServiceAccount
+    #name: cinder-privileged
+    #namespace: openstack
+#---
+#apiVersion: rbac.authorization.k8s.io/v1beta1
+#kind: ClusterRoleBinding
+#metadata:
+  #name: cinder-anyuid
+  #namespace: openstack
+#roleRef:
+  #kind: ClusterRole
+  #name: cinder-anyuid
+#subjects:
+  #- kind: ServiceAccount
+    #name: cinder-anyuid
+    #namespace: openstack
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -143,7 +177,7 @@ spec:
           value: COPY_ALWAYS
         - name: KOLLA_KUBERNETES
         image: tripleoupstream/centos-binary-rabbitmq:latest
-        imagePullPolicy: Always
+        imagePullPolicy: "IfNotPresent"
         name: rabbitmq
         ports:
         - containerPort: 5672
@@ -156,34 +190,18 @@ spec:
         - mountPath: /var/lib/kolla/config_files/
           name: kolla-config
       restartPolicy: Always
-      serviceAccount: openstack
-      serviceAccountName: openstack
+      serviceAccount: cinder-anyuid
+      serviceAccountName: cinder-anyuid
       volumes:
       - configMap:
           name: rabbitmq
         name: kolla-config
 ---
 apiVersion: v1
-kind: ConfigMap
-metadata:
-  labels:
-    app: mariadb
-  name: mariadb
-  namespace: openstack
-data:
-  config.json: |
-    {
-        "command": "/usr/bin/mysqld_safe",
-        "config_files": []
-    }
-  server-cnf: |
-    [mysqld]
-    pid-file=/var/lib/mysql/mariadb.pid
----
-apiVersion: v1
 kind: Service
 metadata:
   name: mariadb
+  namespace: openstack
 spec:
   ports:
   - port: 3306
@@ -191,56 +209,6 @@ spec:
     app: mariadb
   clusterIP: None
 ---
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: mariadb-bootstrap
-spec:
-  template:
-    spec:
-      nodeSelector:
-        mariadb: "true"
-      containers:
-      - env:
-        - name: TZ
-          value: UTC
-        - name: KOLLA_CONFIG_STRATEGY
-          value: COPY_ALWAYS
-        - name: KOLLA_KUBERNETES
-        - name: KOLLA_BOOTSTRAP
-          value: ""
-        - name: DB_ROOT_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: cinder-secrets
-              key: db-root-password
-        image: tripleoupstream/centos-binary-mariadb:latest
-        imagePullPolicy: Always
-        name: mariadb
-        securityContext:
-          privileged: true
-        ports:
-        - containerPort: 3306
-          name: mariadb
-        volumeMounts:
-        - name: mariadb-persistent-storage
-          mountPath: /var/lib/mysql
-        - mountPath: /var/lib/kolla/config_files/
-          name: kolla-config
-      restartPolicy: OnFailure
-      serviceAccount: openstack-priv
-      serviceAccountName: openstack-priv
-      volumes:
-      - name: mariadb-persistent-storage
-        hostPath:
-          path: /var/lib/mysql
-          type: Directory
-      - configMap:
-          name: mariadb
-        name: kolla-config
-
----
-# Will not start before  mariadb-bootstrap
 apiVersion: apps/v1beta1
 kind: StatefulSet
 metadata:
@@ -248,62 +216,33 @@ metadata:
   namespace: openstack
 spec:
   replicas: 1
-  serviceName: mariadb
   selector:
     matchLabels:
       app: mariadb
+  serviceName: mariadb
   template:
     metadata:
       labels:
         app: mariadb
     spec:
-      nodeSelector:
-        mariadb: "true"
-      initContainers:        
-        - name: dependencies
-          image: "tripleoupstream/centos-binary-kubernetes-entrypoint"
-          imagePullPolicy: "IfNotPresent"
-          env:
-            - name: "DEPENDENCY_JOBS"
-              value: "mariadb-bootstrap"
-            - name: NAMESPACE
-              value: "openstack"
       containers:
-      - env:
-        - name: TZ
-          value: UTC
-        - name: KOLLA_CONFIG_STRATEGY
-          value: COPY_ALWAYS
-        - name: KOLLA_KUBERNETES
-        - name: DB_ROOT_PASSWORD
+      - image: mariadb
+        name: mariadb
+        env:
+        - name: MYSQL_ROOT_PASSWORD
           valueFrom:
             secretKeyRef:
               name: cinder-secrets
-              key: db-root-password
-        image: tripleoupstream/centos-binary-mariadb:latest
-        imagePullPolicy: Always
-        name: mariadb
-        securityContext:
-          privileged: true
+              key: mariadb-root-password
         ports:
         - containerPort: 3306
           name: mariadb
         volumeMounts:
         - name: mariadb-persistent-storage
           mountPath: /var/lib/mysql
-        - mountPath: /var/lib/kolla/config_files/
-          name: kolla-config
-      restartPolicy: Always
-      serviceAccount: openstack-priv
-      serviceAccountName: openstack-priv
       volumes:
       - name: mariadb-persistent-storage
-        hostPath:
-          path: /var/lib/mysql
-          type: Directory
-      - configMap:
-          name: mariadb
-        name: kolla-config
+
 
 # Cinder
 ---
@@ -311,6 +250,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: cinder
+  namespace: openstack
 spec:
   ports:
   - port: 8776
@@ -328,51 +268,18 @@ metadata:
 data:
   cinder.conf: |
     [DEFAULT]
-    enable_v2_api = false
     enable_v3_api = true
-    storage_availability_zone = nova
-    enable_v3_api = True
-    dellemc_xtremio_iscsi_backend = False
     glance_api_servers = none
-    cinder_iscsi_address = iscsid
-    cinder_enable_rbd_backend = True
-    cinder_iscsi_helper = lioadm
     enabled_backends = xtremio
-    authentication_type = cephx
-    cinder_enable_netapp_backend = False
     glance_api_version = 2
     log_dir = /var/log/cinder
     osapi_volume_listen = 0.0.0.0
-    ceph_cluster_fsid = 1611b996-d2d7-11e6-b1c2-5254004237d4
-    rpc_backend = rabbit
-    cinder_lvm_loop_device_size = 10280
-    ceph_mon_host = 10.10.10.10
-    cinder_rbd_pool_name = volumes
-    nova_catalog_admin_info = compute:nova:adminURL
-    cinder_enable_iscsi_backend = False
     scheduler_driver = cinder.scheduler.filter_scheduler.FilterScheduler
     nova_catalog_info = compute:nova:internalURL
     api_paste_config = /etc/cinder/api-paste.ini
     transport_url = rabbit://guest:rabbitmqpassword@rabbitmq:5672/?ssl=0
-    cinder_enable_nfs_backend = False
-    cinder_rbd_user_name = openstack
     public_bind_host = 0.0.0.0
-    control_exchange = openstack
     auth_strategy = noauth
-    default_availability_zone = nova
-    osapi_volume_workers = 2
-
-    [oslo_messaging_rabbit]
-    rabbit_userid = guest
-    rabbit_port = 5672
-    heartbeat_timeout_threshold = 60
-    rabbit_password = rabbitmqpassword
-    ssl = False
-    rabbit_use_ssl = False
-    rabbit_heartbeat_timeout_threshold = 60
-
-    [oslo_middleware]
-    enable_proxy_headers_parsing = True
 
     [oslo_messaging_notifications]
     transport_url = rabbit://guest:rabbitmqpassword@rabbitmq:5672/?ssl=0
@@ -393,6 +300,9 @@ data:
     [oslo_policy]
     policy_file = /etc/cinder/policy.json
 
+    [privsep_entrypoint]
+    helper_command = sudo cinder-rootwrap /etc/cinder/rootwrap.conf privsep-helper --config-file /etc/cinder/cinder.conf
+
     [xtremio]
     max_over_subscription_ratio = 40.0
     use_multipath_for_image_xfer=true
@@ -403,6 +313,7 @@ data:
     san_login=cinder
     san_password=qum5net
     image_volume_cache_enabled = false
+
   cinder-wsgi.conf: |
     Listen 0.0.0.0:8776
 
@@ -462,49 +373,18 @@ metadata:
 data:
   cinder.conf: |
     [DEFAULT]
-    storage_availability_zone = nova
-    enable_v3_api = True
-    dellemc_xtremio_iscsi_backend = False
+    enable_v3_api = true
     glance_api_servers = none
-    cinder_iscsi_address = iscsid
-    cinder_enable_rbd_backend = True
-    cinder_iscsi_helper = lioadm
     enabled_backends = xtremio
-    authentication_type = cephx
-    cinder_enable_netapp_backend = False
     glance_api_version = 2
     log_dir = /var/log/cinder
     osapi_volume_listen = 0.0.0.0
-    ceph_cluster_fsid = 1611b996-d2d7-11e6-b1c2-5254004237d4
-    rpc_backend = rabbit
-    cinder_lvm_loop_device_size = 10280
-    ceph_mon_host = 10.10.10.10
-    cinder_rbd_pool_name = volumes
-    nova_catalog_admin_info = compute:nova:adminURL
-    cinder_enable_iscsi_backend = False
     scheduler_driver = cinder.scheduler.filter_scheduler.FilterScheduler
     nova_catalog_info = compute:nova:internalURL
     api_paste_config = /etc/cinder/api-paste.ini
     transport_url = rabbit://guest:rabbitmqpassword@rabbitmq:5672/?ssl=0
-    cinder_enable_nfs_backend = False
-    cinder_rbd_user_name = openstack
     public_bind_host = 0.0.0.0
-    control_exchange = openstack
     auth_strategy = noauth
-    default_availability_zone = nova
-    osapi_volume_workers = 2
-
-    [oslo_messaging_rabbit]
-    rabbit_userid = guest
-    rabbit_port = 5672
-    heartbeat_timeout_threshold = 60
-    rabbit_password = rabbitmqpassword
-    ssl = False
-    rabbit_use_ssl = False
-    rabbit_heartbeat_timeout_threshold = 60
-
-    [oslo_middleware]
-    enable_proxy_headers_parsing = True
 
     [oslo_messaging_notifications]
     transport_url = rabbit://guest:rabbitmqpassword@rabbitmq:5672/?ssl=0
@@ -525,6 +405,9 @@ data:
     [oslo_policy]
     policy_file = /etc/cinder/policy.json
 
+    [privsep_entrypoint]
+    helper_command = sudo cinder-rootwrap /etc/cinder/rootwrap.conf privsep-helper --config-file /etc/cinder/cinder.conf
+
     [xtremio]
     max_over_subscription_ratio = 40.0
     use_multipath_for_image_xfer=true
@@ -535,6 +418,7 @@ data:
     san_login=cinder
     san_password=qum5net
     image_volume_cache_enabled = false
+
   config.json: |
     {
         "command": "cinder-scheduler --config-file /var/lib/kolla/config_files/cinder.conf",
@@ -565,54 +449,23 @@ kind: ConfigMap
 metadata:
   labels:
     app: cinder
-  name: cinder-volume
+  name: cinder-volume-xtremio
   namespace: openstack
 data:
   cinder.conf: |
     [DEFAULT]
-    storage_availability_zone = nova
-    enable_v3_api = True
-    dellemc_xtremio_iscsi_backend = False
+    enable_v3_api = true
     glance_api_servers = none
-    cinder_iscsi_address = iscsid
-    cinder_enable_rbd_backend = True
-    cinder_iscsi_helper = lioadm
     enabled_backends = xtremio
-    authentication_type = cephx
-    cinder_enable_netapp_backend = False
     glance_api_version = 2
     log_dir = /var/log/cinder
     osapi_volume_listen = 0.0.0.0
-    ceph_cluster_fsid = 1611b996-d2d7-11e6-b1c2-5254004237d4
-    rpc_backend = rabbit
-    cinder_lvm_loop_device_size = 10280
-    ceph_mon_host = 10.10.10.10
-    cinder_rbd_pool_name = volumes
-    nova_catalog_admin_info = compute:nova:adminURL
-    cinder_enable_iscsi_backend = False
     scheduler_driver = cinder.scheduler.filter_scheduler.FilterScheduler
     nova_catalog_info = compute:nova:internalURL
     api_paste_config = /etc/cinder/api-paste.ini
     transport_url = rabbit://guest:rabbitmqpassword@rabbitmq:5672/?ssl=0
-    cinder_enable_nfs_backend = False
-    cinder_rbd_user_name = openstack
     public_bind_host = 0.0.0.0
-    control_exchange = openstack
     auth_strategy = noauth
-    default_availability_zone = nova
-    osapi_volume_workers = 2
-
-    [oslo_messaging_rabbit]
-    rabbit_userid = guest
-    rabbit_port = 5672
-    heartbeat_timeout_threshold = 60
-    rabbit_password = rabbitmqpassword
-    ssl = False
-    rabbit_use_ssl = False
-    rabbit_heartbeat_timeout_threshold = 60
-
-    [oslo_middleware]
-    enable_proxy_headers_parsing = True
 
     [oslo_messaging_notifications]
     transport_url = rabbit://guest:rabbitmqpassword@rabbitmq:5672/?ssl=0
@@ -633,6 +486,9 @@ data:
     [oslo_policy]
     policy_file = /etc/cinder/policy.json
 
+    [privsep_entrypoint]
+    helper_command = sudo cinder-rootwrap /etc/cinder/rootwrap.conf privsep-helper --config-file /etc/cinder/cinder.conf
+
     [xtremio]
     max_over_subscription_ratio = 40.0
     use_multipath_for_image_xfer=true
@@ -643,6 +499,7 @@ data:
     san_login=cinder
     san_password=qum5net
     image_volume_cache_enabled = false
+
   config.json: |
     {
         "command": "cinder-volume --config-file /etc/cinder/cinder.conf",
@@ -694,11 +551,11 @@ spec:
           valueFrom:
             secretKeyRef:
               name: cinder-secrets
-              key: db-root-password
+              key: mariadb-root-password
         - name: TZ
           ###value: UTC
-      serviceAccount: openstack
-      serviceAccountName: openstack
+      serviceAccount: cinder-anyuid
+      serviceAccountName: cinder-anyuid
       restartPolicy: OnFailure 
 ---
 apiVersion: batch/v1
@@ -709,20 +566,10 @@ metadata:
 spec:
   template:
     spec:
-      initContainers:
-        - name: dependencies
-          image: "tripleoupstream/centos-binary-kubernetes-entrypoint"
-          imagePullPolicy: "IfNotPresent"
-          env:
-            - name: "DEPENDENCY_JOBS"
-              value: "cinder-create-db"
-            - name: NAMESPACE
-              value: "openstack"
-
       containers:
       - name: cinder-db-sync
         image: tripleoupstream/centos-binary-cinder-api:latest
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: "IfNotPresent"
         env:
         - name: KOLLA_KUBERNETES
         - name: KOLLA_BOOTSTRAP
@@ -733,8 +580,8 @@ spec:
         volumeMounts:
         - mountPath: /var/lib/kolla/config_files/
           name: kolla-config
-      serviceAccount: openstack
-      serviceAccountName: openstack
+      serviceAccount: cinder-anyuid
+      serviceAccountName: cinder-anyuid
       restartPolicy: OnFailure
       volumes:
       - configMap:
@@ -750,16 +597,6 @@ metadata:
 spec:
   template:
     spec:
-      initContainers:
-        - name: dependencies
-          image: "tripleoupstream/centos-binary-kubernetes-entrypoint"
-          imagePullPolicy: "IfNotPresent"
-          env:
-            - name: "DEPENDENCY_JOBS"
-              value: "cinder-create-db"
-            - name: NAMESPACE
-              value: "openstack"
-
       containers:
       - name: cinder-create-db
         image: tripleoupstream/centos-binary-kolla-toolbox:latest
@@ -779,11 +616,11 @@ spec:
           valueFrom:
             secretKeyRef:
               name: cinder-secrets
-              key: db-root-password
+              key: mariadb-root-password
         - name: TZ
           value: UTC
-      serviceAccount: openstack
-      serviceAccountName: openstack
+      serviceAccount: cinder-anyuid
+      serviceAccountName: cinder-anyuid
       restartPolicy: OnFailure
 ---
 apiVersion: apps/v1beta1
@@ -793,7 +630,6 @@ metadata:
   namespace: openstack
 spec:
   replicas: 1
-  serviceName: cinder
   selector:
     matchLabels:
       app: cinder
@@ -802,10 +638,48 @@ spec:
       labels:
         app: cinder
     spec:
-      serviceAccount: openstack
-      serviceAccountName: openstack
+      serviceAccount: cinder-anyuid
+      serviceAccountName: cinder-anyuid
+      initContainers:
+      - name: updated-config
+        image: tripleoupstream/centos-binary-kolla-toolbox
+        imagePullPolicy: "IfNotPresent"
+        command:
+          - /bin/sh
+          - -c
+          - |
+            cp -a /srv/configmap/..data/* /srv/pod-main-config/;
+            CONF=/srv/pod-main-config/cinder.conf;
+            crudini --set $CONF DEFAULT transport_url rabbit://guest:$RABBITMQ_PASSWORD@rabbitmq:5672/?ssl=0;
+            crudini --set $CONF oslo_messaging_notifications transport_url rabbit://guest:$RABBITMQ_PASSWORD@rabbitmq:5672/?ssl=0;
+            crudini --set $CONF database connection mysql+pymysql://root:$DB_ROOT_PASSWORD@mariadb:3306/cinder;
+            crudini --set $CONF database password $CINDER_PASSWORD;
+        env:
+        - name: DB_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: cinder-secrets
+              key: mariadb-root-password
+        - name: CINDER_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: cinder-secrets
+              key: cinder-password
+        - name: RABBITMQ_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: cinder-secrets
+              key: rabbitmq-password
+
+        volumeMounts:
+         - name: template-config
+           mountPath: /srv/configmap
+         - name: final-config
+           mountPath: /srv/pod-main-config
+
       containers:
       - image: tripleoupstream/centos-binary-cinder-api:latest
+        imagePullPolicy: "IfNotPresent"
         name: cinder-api
         env:
         - name: TZ
@@ -819,14 +693,16 @@ spec:
           name: cinder-api
         volumeMounts:
         - mountPath: /var/lib/kolla/config_files/
-          name: kolla-config
+          name: final-config
       restartPolicy: Always
-      serviceAccount: openstack
-      serviceAccountName: openstack
+      serviceAccount: cinder-anyuid
+      serviceAccountName: cinder-anyuid
       volumes:
       - configMap:
           name: cinder-api
-        name: kolla-config
+        name: template-config
+      - name: final-config
+        emptyDir: {}
 ---
 apiVersion: apps/v1beta1
 kind: Deployment
@@ -835,7 +711,6 @@ metadata:
   namespace: openstack
 spec:
   replicas: 1
-  serviceName: cinder
   selector:
     matchLabels:
       app: cinder
@@ -844,20 +719,48 @@ spec:
       labels:
         app: cinder
     spec:
-      serviceAccount: openstack
-      serviceAccountName: openstack
+      serviceAccount: cinder-anyuid
+      serviceAccountName: cinder-anyuid
       initContainers:
-        - name: dependencies
-          image: "tripleoupstream/centos-binary-kubernetes-entrypoint"
-          imagePullPolicy: "IfNotPresent"
-          env:
-            - name: "DEPENDENCY_JOBS"
-              value: "cinder-db-sync"
-            - name: NAMESPACE
-              value: "openstack"
+      - name: updated-config
+        image: tripleoupstream/centos-binary-kolla-toolbox
+        imagePullPolicy: "IfNotPresent"
+        command:
+          - /bin/sh
+          - -c
+          - |
+            cp -a /srv/configmap/..data/* /srv/pod-main-config/;
+            CONF=/srv/pod-main-config/cinder.conf;
+            crudini --set $CONF DEFAULT transport_url rabbit://guest:$RABBITMQ_PASSWORD@rabbitmq:5672/?ssl=0;
+            crudini --set $CONF oslo_messaging_notifications transport_url rabbit://guest:$RABBITMQ_PASSWORD@rabbitmq:5672/?ssl=0;
+            crudini --set $CONF database connection mysql+pymysql://root:$DB_ROOT_PASSWORD@mariadb:3306/cinder;
+            crudini --set $CONF database password $CINDER_PASSWORD;
+        env:
+        - name: DB_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: cinder-secrets
+              key: mariadb-root-password
+        - name: CINDER_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: cinder-secrets
+              key: cinder-password
+        - name: RABBITMQ_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: cinder-secrets
+              key: rabbitmq-password
+
+        volumeMounts:
+         - name: template-config
+           mountPath: /srv/configmap
+         - name: final-config
+           mountPath: /srv/pod-main-config
 
       containers:
       - image: tripleoupstream/centos-binary-cinder-scheduler:latest
+        imagePullPolicy: "IfNotPresent"
         name: cinder-api
         env:
         - name: TZ
@@ -867,15 +770,17 @@ spec:
         - name: KOLLA_KUBERNETES
           value: ""
         volumeMounts:
-        - mountPath: /var/lib/kolla/config_files/
-          name: kolla-config
+        - name: final-config
+          mountPath: /var/lib/kolla/config_files/
       restartPolicy: Always
-      serviceAccount: openstack
-      serviceAccountName: openstack
+      serviceAccount: cinder-anyuid
+      serviceAccountName: cinder-anyuid
       volumes:
       - configMap:
           name: cinder-scheduler
-        name: kolla-config
+        name: template-config
+      - name: final-config
+        emptyDir: {}
 ---
 apiVersion: apps/v1beta1
 kind: Deployment
@@ -884,7 +789,6 @@ metadata:
   namespace: openstack
 spec:
   replicas: 1
-  serviceName: cinder
   selector:
     matchLabels:
       app: cinder
@@ -893,10 +797,47 @@ spec:
       labels:
         app: cinder
     spec:
-      serviceAccount: openstack
-      serviceAccountName: openstack
+      serviceAccount: cinder-anyuid
+      serviceAccountName: cinder-anyuid
+      initContainers:
+      - name: updated-config
+        image: tripleoupstream/centos-binary-kolla-toolbox
+        imagePullPolicy: "IfNotPresent"
+        command:
+          - /bin/sh
+          - -c
+          - |
+            cp -a /srv/configmap/..data/* /srv/pod-main-config/;
+            CONF=/srv/pod-main-config/cinder.conf;
+            crudini --set $CONF DEFAULT transport_url rabbit://guest:$RABBITMQ_PASSWORD@rabbitmq:5672/?ssl=0;
+            crudini --set $CONF oslo_messaging_notifications transport_url rabbit://guest:$RABBITMQ_PASSWORD@rabbitmq:5672/?ssl=0;
+            crudini --set $CONF database connection mysql+pymysql://root:$DB_ROOT_PASSWORD@mariadb:3306/cinder;
+            crudini --set $CONF database password $CINDER_PASSWORD;
+        env:
+        - name: DB_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: cinder-secrets
+              key: mariadb-root-password
+        - name: CINDER_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: cinder-secrets
+              key: cinder-password
+        - name: RABBITMQ_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: cinder-secrets
+              key: rabbitmq-password
+
+        volumeMounts:
+         - name: template-config
+           mountPath: /srv/configmap
+         - name: final-config
+           mountPath: /srv/pod-main-config
       containers:
       - image: tripleoupstream/centos-binary-cinder-volume:latest
+        imagePullPolicy: "IfNotPresent"
         name: cinder-volume
         env:
         - name: TZ
@@ -906,9 +847,12 @@ spec:
         - name: KOLLA_KUBERNETES
           value: ""
         volumeMounts:
-        - mountPath: /var/lib/kolla/config_files/
-          name: kolla-config
+        - name: final-config
+          mountPath: /var/lib/kolla/config_files/
       volumes:
-        - configMap:
-            name: cinder-volume
-          name: kolla-config
+        - name: template-config
+          configMap:
+            name: cinder-volume-xtremio
+        - name: final-config
+          emptyDir: {}
+
