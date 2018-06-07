@@ -1,58 +1,79 @@
-# All-in-one Ceph Deployment
+# Storage Cinder Role
 
-## Prereqs
-A fully functioning OCP cluster
+This role aggregates Cinder, RabbitMQ and MariaDB to deploy Standalone
+Cinder with no authentication (noauth).
 
-## As an admin of the OCP cluster, label a node to host Ceph:
-oc label node some-host "controller"="true"
+MariaDB is deployed on a node with label={{infra_node_label}}. MariaDB uses hostPath
+for storage.
 
-## Deploy Ceph
-oc create -f ceph-demo.yml
+### Role Variables
+| variable       | default           |choices           | comments  |
+|:-------------|:-------------|:----------|:----------|
+| action |  provision | <ul><li>provision</li><li>deprovision</li></ul>| Action to perform on the role.|
+| infra_node_label | controller | | Node label on the host to allow MariaDB to utilize its hostpath. |
+| namespace | openstack | | A namespace where cinder and its dependencies will be deployed. | 
+| service_account | cinder | | A service account with at least anyuid capability for use in OpenShift. |
+| privileged_service_account | cinder_privileged | | A privileged service account for elevated privileges in OpenShift. |
+| mariadb_root_password | weakpassword | | |
+| mariadb_user | root | | |
+| cinder_user | cinder | | |
+| cinder_password | cinderpassword | | |
+| rabbitmq_user | guest | | |
+| rabbitmq_password | rabbitmqpassword | | |
 
-## Teardown
-oc delete deployment ceph-demo
+### Backend-specific Variables
 
-On the host (the host that was labeled above) where ceph created directories:
+#### Ceph
+| variable       | default           |choices           | comments  |
+|:-------------|:-------------|:----------|:----------|
+| enabled | false  | <ul><li>true</li><li>false</li></ul>| The var to enable or disable this backend. |
+| cinder_rbd_pool_name | cinder_volumes  | | |
+| cinder_rbd_user_name | cinder  | | |
+| client_key | | | The client key is a string found in |
+| ceph_mon_host | | | The IP address{es) of Ceph Monitors. Multiple IPs are specified as a comma-separated list |
 
-rm -rf /etc/ceph /var/lib/ceph
+Refer to [ceph](./docs/ceph.md) document to create the cinder pool and user.
 
-# Standalone Cinder
-## Caveats
-1. MariaDB doesn't use persistent storage
-2. Cinder auth strategy is 'noauth'
+#### Xtremio
+| variable       | default           |choices           | comments  |
+|:-------------|:-------------|:----------|:----------|
+| enabled | false  | <ul><li>true</li><li>false</li></ul>| The var to enable or disable this backend. |
+| san_ip | | | |
+| san_login | | | |
+| san_password | | | |
 
-## Prerequisites
-A fully working OpenShift/Kubernetes cluster. This template has been tested on
-OCP 3.6 and newer
+#### NetApp
+| variable       | default           |choices           | comments  |
+|:-------------|:-------------|:----------|:----------|
+| enabled | false  | <ul><li>true</li><li>false</li></ul>| The var to enable or disable this backend. |
+| netapp_storage_family | ontap_cluster  | <ul><li>ontap_7mode</li><li>ontap_cluster</li></ul> | |
+| netapp_storage_protocol: | nfs | <ul><li>iscsi</li><li>fc</li><li>nfs</li></ul>  | |
+| netapp_server_hostname | | | |
+| netapp_server_port | | | |
+| netapp_login | | | |
+| netapp_password | | | |
 
-## Create two service accounts:
-oc create sa cinder-anyuid
+### Usage
 
-oc create sa cinder-privileged
+```
+- name: storage-cinder
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars:
+    action: provision
+    namespace: openstack
+    ceph:
+        enabled: true
+        cinder_rbd_pool_name: cinder_volumes
+        cinder_rbd_user_name: cinder
+        client_key: keykeykeykeykeykeykeykeykeykeykeykeykeykeykeykeykey
+        authentication_type: cephx
+        ceph_mon_host: 10.10.10.10
 
-## Create a project called 'openstack'. All the pods reside here.
-oc new-project openstack
+  roles:
+    - role: storage-cinder
+      playbook_debug: false
 
-## As cluster admin, add scc to the service accounts:
-oadm policy add-scc-to-user anyuid -n openstack -z cinder-anyuid
+```
 
-oadm policy add-scc-to-user privileged -n openstack -z cinder-privileged
-
-## Create Cinder installation
-oc create -f cinder-xtremio.yml
-
-# Cinder with Ceph Backend
-Gather info of your Ceph cluster. Or deploy a dummy on your OCP cluster.
-
-Create a cinder client in the Ceph cluster. Fetch the fsid, ceph.client.cinder.keyring,
-ceph.conf and the fsid. We will create a secret out of these.
-
-'''bash
-oc create secret generic ceph-secrets --from-literal fsid='cdd4641e-f769-410b-b7c5-61ad19708145' --from-file=ceph.conf --from-file=ceph.client.cinder.keyring
-'''
-
-Deploy Cinder with Ceph backend.
-
-'''bash
-oc create -f cinder-ceph.yml
-'''
