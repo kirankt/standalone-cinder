@@ -1,0 +1,24 @@
+---
+- src: https://github.com/openshift/openshift-ansible-contrib
+  version: master
+  name: openshift-contrib
+
+- src: https://github.com/ansible/ansible-kubernetes-modules.git
+  version: v0.3.1-5
+  name: ansible.kubernetes-modules
+
+- src: https://github.com/openstack/openstack-ansible-plugins
+  version: 17.0.2
+  name: openstack-ansible-plugins
+
+- src: https://github.com/tripleo-apb/ansible-role-k8s-tripleo
+  version: v0.1
+  name: ansible-role-k8s-tripleo
+
+- src: https://github.com/openstack/ansible-role-k8s-rabbitmq
+  version: v0.1
+  name: ansible-role-k8s-rabbitmq
+
+- src: https://github.com/tripleo-apb/ansible-role-k8s-cinder
+  version: v0.1
+  name: ansible-role-k8s-cinder
